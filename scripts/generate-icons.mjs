@@ -1,0 +1,172 @@
+// Generates PWA icons (192, 512, maskable, and SVG) without any external dependencies.
+// Uses the built-in `zlib` module to write valid PNG files with raw pixel data.
+import { deflateSync } from 'node:zlib';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const outDir = join(__dirname, '..', 'public', 'icons');
+mkdirSync(outDir, { recursive: true });
+
+function crc32(buf) {
+  let c;
+  const crcTable = [];
+  for (let n = 0; n < 256; n++) {
+    c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    crcTable[n] = c >>> 0;
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc = crcTable[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const typeBuf = Buffer.from(type, 'ascii');
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])));
+  return Buffer.concat([len, typeBuf, data, crcBuf]);
+}
+
+// Simple RGBA pixel buffer with cat glyph (ears, head, eyes, whiskers).
+function drawCat(size) {
+  const px = Buffer.alloc(size * size * 4);
+  const set = (x, y, r, g, b, a = 255) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const i = (y * size + x) * 4;
+    px[i] = r;
+    px[i + 1] = g;
+    px[i + 2] = b;
+    px[i + 3] = a;
+  };
+  // Background
+  const bg = [247, 245, 241]; // warm off-white
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      set(x, y, bg[0], bg[1], bg[2]);
+    }
+  }
+
+  // Cat body color
+  const fur = [79, 124, 172]; // #4f7cac
+  const dark = [45, 73, 104];
+  const pink = [226, 137, 145];
+
+  // Head: circle faces drawn via distance functions
+  const headCX = size * 0.5;
+  const headCY = size * 0.52;
+  const headR = size * 0.24;
+
+  const earL = { x: size * 0.27, y: size * 0.3, w: size * 0.14, h: size * 0.18 };
+  const earR = { x: size * 0.59, y: size * 0.3, w: size * 0.14, h: size * 0.18 };
+  const inEar = (x, y, e) => {
+    const px = (x - e.x) / e.w;
+    const py = (y - e.y) / e.h;
+    return px >= 0 && px <= 1 && py >= 0 && py <= 1 && py <= 1 - px * 0.4;
+  };
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - headCX;
+      const dy = y - headCY;
+      const inHead = dx * dx + dy * dy <= headR * headR;
+      const inEarL = inEar(x, y, earL);
+      const inEarR = inEar(x, y, earR);
+      if (inHead || inEarL || inEarR) set(x, y, fur[0], fur[1], fur[2]);
+      // Inner ear pink
+      if (inEarL && x > earL.x + earL.w * 0.2 && x < earL.x + earL.w * 0.8 && y < earL.y + earL.h * 0.55)
+        set(x, y, pink[0], pink[1], pink[2]);
+      if (inEarR && x > earR.x + earR.w * 0.2 && x < earR.x + earR.w * 0.8 && y < earR.y + earR.h * 0.55)
+        set(x, y, pink[0], pink[1], pink[2]);
+    }
+  }
+
+  // Eyes
+  const eyeY = size * 0.52;
+  const eyeR = size * 0.028;
+  for (let ex = size * 0.38; ex <= size * 0.62; ex += size * 0.24) {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = x - ex;
+        const dy = y - eyeY;
+        if (dx * dx + dy * dy <= eyeR * eyeR) set(x, y, dark[0], dark[1], dark[2]);
+      }
+    }
+  }
+
+  // Nose
+  const noseCX = size * 0.5;
+  const noseY = size * 0.62;
+  const noseR = size * 0.018;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - noseCX;
+      const dy = y - noseY;
+      if (dx * dx + dy * dy <= noseR * noseR) set(x, y, pink[0], pink[1], pink[2]);
+    }
+  }
+
+  // Whiskers
+  const whiskerY = size * 0.66;
+  const whiskerStartLeft = size * 0.24;
+  const whiskerEnd = size * 0.06;
+  const step = Math.max(1, Math.floor(size / 200));
+  for (let i = whiskerStartLeft; i >= whiskerEnd; i -= step) {
+    set(i, whiskerY, dark[0], dark[1], dark[2], 200);
+    set(i, whiskerY - size * 0.015, dark[0], dark[1], dark[2], 160);
+    set(i, whiskerY + size * 0.015, dark[0], dark[1], dark[2], 160);
+    set(size - i, whiskerY, dark[0], dark[1], dark[2], 200);
+    set(size - i, whiskerY - size * 0.015, dark[0], dark[1], dark[2], 160);
+    set(size - i, whiskerY + size * 0.015, dark[0], dark[1], dark[2], 160);
+  }
+
+  return px;
+}
+
+function encodePNG(size, { maskable = false } = {}) {
+  const px = drawCat(size);
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 4 + 1)] = 0; // filter type 0
+    px.copy(raw, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // color type RGBA
+  const idat = deflateSync(raw, { level: 9 });
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', idat),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+writeFileSync(join(outDir, 'icon-192.png'), encodePNG(192));
+writeFileSync(join(outDir, 'icon-512.png'), encodePNG(512));
+writeFileSync(join(outDir, 'icon-maskable-512.png'), encodePNG(512, { maskable: true }));
+
+// SVG fallback icon
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#4f7cac"/>
+  <ellipse cx="256" cy="270" rx="120" ry="110" fill="#f7f5f1"/>
+  <path d="M150 230 L120 130 L210 190 Z" fill="#f7f5f1"/>
+  <path d="M360 230 L390 130 L300 190 Z" fill="#f7f5f1"/>
+  <circle cx="210" cy="270" r="14" fill="#2d4968"/>
+  <circle cx="302" cy="270" r="14" fill="#2d4968"/>
+  <path d="M246 320 Q256 332 266 320 Q262 334 250 334 Q258 340 266 334" fill="#e28991"/>
+  <polygon points="214,360 206,382 222,371" fill="#2d4968"/>
+  <polygon points="298,360 306,382 290,371" fill="#2d4968"/>
+  <path d="M120 270 L186 268 M120 282 L186 284 M120 294 L186 296" stroke="#2d4968" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M392 270 L326 268 M392 282 L326 284 M392 294 L326 296" stroke="#2d4968" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.8"/>
+</svg>`;
+writeFileSync(join(outDir, 'icon.svg'), svg);
+
+console.log('Icons generated in', outDir);
